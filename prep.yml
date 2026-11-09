@@ -1,0 +1,56 @@
+---
+- name: Базовая подготовка серверов
+  hosts: all
+  tasks:
+    - name: Ставим нужные пакеты
+      ansible.builtin.apt:
+        name:
+          - vim
+          - git
+          - curl
+          - htop
+          - tree
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+- name: Настройка ядра для Elasticsearch
+  hosts: elk
+  tasks:
+    - name: Параметр vm.max_map_count
+      ansible.posix.sysctl:
+        name: vm.max_map_count
+        value: "262144"
+        sysctl_file: /etc/sysctl.d/90-elasticsearch.conf
+        state: present
+        reload: true
+
+- name: Swap
+  hosts: all
+  tasks:
+    - name: Файл подкачки существует
+      ansible.builtin.command: fallocate -l 2G /swapfile
+      args:
+        creates: /swapfile
+
+    - name: Права на файл подкачки
+      ansible.builtin.file:
+        path: /swapfile
+        owner: root
+        mode: "0600"
+
+    - name: Размечаем файл под swap
+      ansible.builtin.command: mkswap /swapfile
+      when: ansible_swaptotal_mb == 0
+
+    - name: Включаем swap
+      ansible.builtin.command: swapon /swapfile
+      when: ansible_swaptotal_mb == 0
+
+    - name: Строка в fstab
+      ansible.posix.mount:
+        path: none
+        src: /swapfile
+        fstype: swap
+        opts: sw
+        state: present
