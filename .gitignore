@@ -1,4 +1,3 @@
 inventory.ini
 .vault_pass
-*.tar.gz
-*.retry
+group_vars/all/vault.yml

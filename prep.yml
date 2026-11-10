@@ -41,11 +41,11 @@
 
     - name: Размечаем файл под swap
       ansible.builtin.command: mkswap /swapfile
-      when: ansible_swaptotal_mb == 0
+      when: ansible_facts['swaptotal_mb'] == 0
 
     - name: Включаем swap
       ansible.builtin.command: swapon /swapfile
-      when: ansible_swaptotal_mb == 0
+      when: ansible_facts['swaptotal_mb'] == 0
 
     - name: Строка в fstab
       ansible.posix.mount:
