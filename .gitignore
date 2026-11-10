@@ -1,0 +1,4 @@
+inventory.ini
+.vault_pass
+*.tar.gz
+*.retry
