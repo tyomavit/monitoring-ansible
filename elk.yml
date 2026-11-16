@@ -1,0 +1,52 @@
+---
+- name: ELK на сервере A
+  hosts: elk
+  vars:
+    elk_dir: /opt/monitoring-compose/elk
+
+  tasks:
+    - name: Каталоги стека
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ elk_dir }}"
+        - "{{ elk_dir }}/logstash/pipeline"
+        - "{{ elk_dir }}/filebeat"
+
+    - name: Файл .env из шаблона
+      ansible.builtin.template:
+        src: elk/env.j2
+        dest: "{{ elk_dir }}/.env"
+        mode: "0600"
+
+    - name: Конфиги стека
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ elk_dir }}/{{ item.dest }}"
+        mode: "0644"
+      loop:
+        - { src: elk/docker-compose.yml, dest: docker-compose.yml }
+        - { src: elk/logstash/pipeline/beats-to-es.conf, dest: logstash/pipeline/beats-to-es.conf }
+        - { src: elk/filebeat/filebeat.yml,	dest: filebeat/filebeat.yml }
+
+    - name: Запуск только Elasticsearch
+      community.docker.docker_compose_v2:
+        project_src: "{{ elk_dir }}"
+        services:
+          - elasticsearch
+        state: present
+
+    - name: Ждём, пока Elasticsearch начнёт отвечать
+      ansible.builtin.uri:
+        url: http://127.0.0.1:9200
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: true
+        status_code: 200
+      register: es_health
+      until: es_health.status == 200
+      retries: 30
+      delay: 5
+      no_log: true

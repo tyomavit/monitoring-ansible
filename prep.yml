@@ -14,6 +14,18 @@
         update_cache: true
         cache_valid_time: 3600
 
+    - name: Имя сервера как в инвентаре
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Ядро реже уходит в swap
+      ansible.posix.sysctl:
+        name: vm.swappiness
+        value: "10"
+        sysctl_file: /etc/sysctl.d/90-swappiness.conf
+        state: present
+        reload: true
+
 - name: Настройка ядра для Elasticsearch
   hosts: elk
   tasks:
