@@ -50,3 +50,104 @@
       retries: 30
       delay: 5
       no_log: true
+
+    # пробуем войти как kibana_system с паролем из сейфа: 200 = пароль уже стоит, 401 = ещё нет
+    - name: Проверяем пароль kibana_system
+      ansible.builtin.uri:
+        url: http://127.0.0.1:9200/_security/_authenticate
+        user: kibana_system
+        password: "{{ kibana_password }}"
+        force_basic_auth: true
+        status_code: [200, 401]
+      register: kibana_auth
+      no_log: true
+
+    # меняем пароль, только если проверка вернула 401
+    - name: Пароль kibana_system
+      ansible.builtin.uri:
+        url: http://127.0.0.1:9200/_security/user/kibana_system/_password
+        method: POST
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          password: "{{ kibana_password }}"
+      when: kibana_auth.status == 401
+      changed_when: true
+      no_log: true
+
+    # роль: писать только в filebeat-*; на повторе ES ответит created=false, и будет ok
+    - name: Роль logstash_writer
+      ansible.builtin.uri:
+        url: http://127.0.0.1:9200/_security/role/logstash_writer
+        method: PUT
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          cluster: [monitor]
+          indices:
+            - names: ["filebeat-*"]
+              privileges: [write, create, create_index]
+      register: role_result
+      changed_when: role_result.json.role.created
+      no_log: true
+
+     # пользователь logstash_internal с ролью logstash_writer; на повторе created=false, и будет ok
+    - name: Пользователь logstash_internal
+      ansible.builtin.uri:
+        url: http://127.0.0.1:9200/_security/user/logstash_internal
+        method: PUT
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          password: "{{ logstash_internal_password  }}"
+          roles: [logstash_writer]
+      register: user_result
+      changed_when: user_result.json.created
+      no_log: true
+
+    # есть ли уже шаблон индекса Filebeat: 200 = setup уже делали, 404 = нет
+    - name: Проверяем шаблон Filebeat
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:9200/_index_template/filebeat-{{ elastic_version }}"
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      register: fb_template
+      no_log: true
+
+    # разовый контейнер, шаблон и data stream под администратором
+    - name: filebeat setup
+      ansible.builtin.command:
+        cmd: >-
+          docker compose run --rm --no-deps filebeat setup
+          --strict.perms=false --index-management
+          -E output.logstash.enabled=false
+          -E 'output.elasticsearch.hosts=["http://127.0.0.1:9200"]'
+          -E output.elasticsearch.username=elastic
+          -E output.elasticsearch.password={{ elastic_password }}
+        chdir: "{{ elk_dir }}"
+      when: fb_template.status == 404
+      no_log: true
+
+    # без services: поднимаем все сервисы (Elasticsearch уже работает, его не тронет)
+    - name: Запуск всего стека
+      community.docker.docker_compose_v2:
+        project_src: "{{ elk_dir }}"
+        state: present
+
+    # Kibana стартует долго: до 40 попыток по 5 секунд
+    - name: Ждём Kibana
+      ansible.builtin.uri:
+        url: http://127.0.0.1:5601/login
+        status_code: 200
+      register: kibana_up
+      until: kibana_up.status == 200
+      retries: 40
+      delay: 5
