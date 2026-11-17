@@ -1,0 +1,64 @@
+---
+- name: Prometheus и Grafana на сервере В
+  hosts: monitoring
+  vars:
+    monitoring_dir: /opt/monitoring-compose/prometheus-grafana
+
+  tasks:
+    - name: Каталоги стека
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ monitoring_dir }}"
+        - "{{ monitoring_dir }}/prometheus/targets"
+        - "{{ monitoring_dir }}/grafana/provisioning/datasources"
+        - "{{ monitoring_dir }}/filebeat"
+
+    - name: Файл .env из шаблона
+      ansible.builtin.template:
+        src: monitoring/env.j2
+        dest: "{{ monitoring_dir }}/.env"
+        mode: "0600"
+
+    - name: Список серверов для Prometheus
+      ansible.builtin.template:
+        src: monitoring/node.yml.j2
+        dest: "{{ monitoring_dir }}/prometheus/targets/node.yml"
+        mode: "0644"
+
+    - name: Конфиги стека
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ monitoring_dir }}/{{ item.dest }}"
+        mode: "0644"
+      loop:
+        - { src: monitoring/docker-compose.yml, dest: docker-compose.yml }
+        - { src: monitoring/prometheus/prometheus.yml, dest: prometheus/prometheus.yml }
+        - { src: monitoring/grafana/provisioning/datasources/prometheus.yml,	dest: grafana/provisioning/datasources/prometheus.yml }
+        - { src: monitoring/filebeat/filebeat.yml, dest: filebeat/filebeat.yml }
+        
+    # все четыре сервиса разом: порядок не важен, пользователей создавать не нужно
+    - name: Запуск стека
+      community.docker.docker_compose_v2:
+        project_src: "{{ monitoring_dir }}"
+        state: present
+
+    # Prometheus отвечает 200 на /-/ready, когда готов
+    - name: Ждём Prometheus
+      ansible.builtin.uri:
+        url: http://127.0.0.1:9090/-/ready
+      register: prom_up
+      until: prom_up.status == 200
+      retries: 30
+      delay: 5
+
+    # Grafana отвечает 200 на /api/health, когда готова
+    - name: Ждём Grafana
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3000/api/health
+      register: grafana_up
+      until: grafana_up.status == 200
+      retries: 30
+      delay: 5

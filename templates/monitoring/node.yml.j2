@@ -1,0 +1,7 @@
+- targets: ['172.30.0.1:9100']
+  labels:
+    host: '{{ inventory_hostname }}'
+
+- targets: ['{{ hostvars['elk-vps']['ansible_host'] }}:9100']
+  labels:
+    host: 'elk-vps'
