@@ -1,0 +1,7 @@
+---
+# коллекции Ansible, которые используют плейбуки проекта
+collections:
+  - name: community.docker
+  - name: community.general
+  - name: ansible.posix
+
