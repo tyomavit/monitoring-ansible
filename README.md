@@ -18,6 +18,7 @@
 | Путь | Что там |
 |---|---|
 | `site.yml` | общий плейбук: вызывает все остальные по порядку |
+| `requirements.yml` | коллекции Ansible, которые нужны плейбукам |
 | `prep.yml` | имя сервера, уникальный machine-id, swap, параметры ядра, вход только по ключу |
 | `docker.yml` | Docker и плагин Compose |
 | `firewall.yml` | ufw: общие правила и порты между A и B |
@@ -38,17 +39,25 @@
 
 ### 0. Что нужно заранее
 
-- Два VPS с Ubuntu 26.04. Серверу A нужно не меньше 8 ГБ памяти (Elasticsearch), серверу B хватит 2 ГБ.
-- Два домена (A-записи у регистратора DNS).
-- Нода управления (любой Linux-сервер или WSL), с которой Ansible ходит на серверы по SSH.
+Три машины с Ubuntu 26.04: новые или существующие, которые можно переустановить (все данные на них будут стёрты).
 
-### 1. Нода: Ansible и ключ
+| Машина | Роль | CPU | RAM | Диск | Примечание |
+|---|---|---|---|---|---|
+| `ansible-ctl` | нода управления: отсюда Ansible ходит на серверы | 1 | 2 ГБ | 10 ГБ | подойдёт и WSL на ноутбуке |
+| `elk-vps` (A) | логи: ELK | 2 | **8 ГБ** | 20 ГБ | Elasticsearch занимает около половины RAM; логи хранятся 14 дней |
+| `monitoring-vps` (B) | метрики: Prometheus и Grafana | 2 | 2 ГБ | 20 ГБ | метрики хранятся 15 дней |
+
+Ещё нужны два домена (A-записи у регистратора DNS) и, по желанию, аккаунт на GitHub с этим репозиторием.
+
+При создании машин в панели хостинга сразу называйте их по ролям, как в таблице: по этим именам их проще различать в панели и в выводе Ansible.
+
+### 1. Нода: имя, Ansible и ключ
 
 ```bash
-# ставим Ansible (полный пакет, в нём уже есть нужные коллекции)
+# имя ноды по роли (у свежего VPS оно случайное); видно в приглашении после перезахода
+hostnamectl set-hostname ansible-ctl
+# ставим Ansible и git
 apt update && apt install -y ansible git
-# проверяем коллекции: ждём три строки с версиями
-ansible-galaxy collection list | grep -E 'community.docker|community.general|ansible.posix'
 # ключ, которым нода входит на серверы (если его ещё нет)
 ssh-keygen -t ed25519 -f ~/.ssh/control_ed25519 -C ansible-ctl
 # публичная часть ключа: её добавляем на серверы
@@ -65,10 +74,17 @@ ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -C ansible-ctl-github
 cat ~/.ssh/id_ed25519.pub
 # проверяем доступ: ждём "Hi <аккаунт>! You've successfully authenticated"
 ssh -T git@github.com
+# (для коммитов с ноды) подпись автора коммитов: имя и почта, как на GitHub
+git config --global user.name "<Имя Фамилия>"
+git config --global user.email "<почта на GitHub>"
 # клонируем репозиторий (подставьте свой аккаунт); для публичного можно https://github.com/<аккаунт>/monitoring-ansible.git
 git clone git@github.com:<аккаунт>/monitoring-ansible.git
 # дальше все команды выполняются отсюда: здесь лежит ansible.cfg
 cd monitoring-ansible
+# свежие версии коллекций, которые нужны плейбукам (Docker, ufw, sysctl и mount)
+ansible-galaxy collection install -r requirements.yml --upgrade
+# проверяем: ждём три строки с версиями
+ansible-galaxy collection list | grep -E 'community.docker|community.general|ansible.posix'
 ```
 
 ### 3. Инвентарь
@@ -125,19 +141,53 @@ dig +short kibana.artemdevops.ru grafana.artemdevops.ru
 
 ### 6. Серверы
 
-1. В панели хостинга переустановите оба VPS на Ubuntu 26.04 и добавьте публичный ключ `control_ed25519.pub`.
-2. На ноде:
+#### 6.1 Создать или переустановить
+
+В панели хостинга создайте оба VPS (или переустановите существующие) на Ubuntu 26.04 и **в той же форме выберите публичный ключ ноды** (`control_ed25519.pub`, его выводит команда из шага 1). Ключ из панели попадает на сервер только при создании или переустановке: добавленный в аккаунт позже на работающий сервер сам не попадёт.
+
+Если панель не принимает ключ («Некорректный ключ»):
+- ключ должен быть **одной строкой**: `ssh-ed25519 AAAA... ansible-ctl`, без переносов;
+- попробуйте вставить его без комментария в конце (`ansible-ctl`);
+- посмотрите, какого типа ключ панель уже приняла раньше (первое слово строки: `ssh-ed25519` или `ssh-rsa`). Если панель принимает только RSA, создайте для ноды ключ RSA: `ssh-keygen -t rsa -b 4096 -f ~/.ssh/control_rsa -C ansible-ctl` и поменяйте путь к ключу в `inventory.ini` (`ansible_ssh_private_key_file`).
+
+#### 6.2 Проверить вход по ключу
 
 ```bash
-# забываем старые отпечатки серверов (после переустановки они новые)
+# забываем старые отпечатки серверов (после переустановки они новые; для новых серверов ответ "not found" нормален)
 ssh-keygen -R <IP сервера A>
 ssh-keygen -R <IP сервера B>
-# входим по разу, чтобы принять новые отпечатки (отвечаем yes) и сразу выйти
-ssh -i ~/.ssh/control_ed25519 root@<IP сервера A> exit
-ssh -i ~/.ssh/control_ed25519 root@<IP сервера B> exit
+# входим по разу строго по ключу, принимаем новый отпечаток (yes); ждём выход без вопроса о пароле
+ssh -i ~/.ssh/control_ed25519 -o PasswordAuthentication=no root@<IP сервера A> exit
+ssh -i ~/.ssh/control_ed25519 -o PasswordAuthentication=no root@<IP сервера B> exit
 # связь Ansible с обоими серверами: ждём два pong
 ansible all -m ping
 ```
+
+**Не запускайте `site.yml`, пока вход по ключу не проходит:** `prep.yml` запрещает вход по паролю, и без рабочего ключа сервер станет недоступен.
+
+#### 6.3 Если ключа на сервере нет: запасные способы
+
+`Permission denied (publickey)` или вопрос о пароле значат, что сервер не знает ключ ноды. Вопрос о пароле появляется, даже если вход по паролю в панели выключен: так SSH-клиент пробует последний способ входа, но никакой пароль сервер не примет. Варианты, от более частого к редкому:
+
+**А. С машины, которой сервер уже доверяет** (например, с ноутбука, чей ключ выбран в панели). Записи в SSH config не нужны: путь к ключу указывается прямо в команде.
+
+```bash
+# (нода) публичная часть ключа ноды: одна строка, копируем целиком
+cat ~/.ssh/control_ed25519.pub
+# (ноутбук) дописываем её на сервер; -i путь к ключу ноутбука; два знака >>, иначе сотрётся ключ ноутбука
+ssh -i ~/.ssh/<ключ ноутбука> root@<IP сервера> "echo '<строка ключа ноды>' >> ~/.ssh/authorized_keys"
+```
+
+**Б. По паролю root.** Включите вход по паролю в панели (обычно с перезагрузкой сервера), возьмите пароль root в панели или в письме о создании сервера, затем:
+
+```bash
+# дописываем ключ ноды на сервер (один раз спросит пароль root)
+ssh-copy-id -i ~/.ssh/control_ed25519.pub root@<IP сервера>
+```
+
+После проверки входа по ключу выключите пароль в панели обратно (`prep.yml` всё равно запретит его в SSH).
+
+**В. Через веб-консоль хостинга (VNC)**, если не работает ничего из выше: войти в консоль сервера в браузере и вписать строку ключа в `/root/.ssh/authorized_keys` вручную.
 
 ### 7. Установка одной командой
 
@@ -147,6 +197,8 @@ time ansible-playbook site.yml
 # повторный прогон: ждём changed=0 на обоих серверах
 ansible-playbook site.yml
 ```
+
+Для ориентира: первый прогон занимает около 6–7 минут (`changed` около 30 на сервер), повторный около полутора минут с `changed=0`. Строки `[DEPRECATION WARNING]` от модулей коллекций (sysctl, mount) не ошибка: это предупреждения авторов коллекций, они уходят после `ansible-galaxy collection install -r requirements.yml --upgrade`, когда авторы выпускают исправление.
 
 ### 8. Проверки
 
@@ -182,26 +234,95 @@ Kibana: Stack Management → Data Views → Create data view, шаблон `file
 
 ---
 
-## Смена IP сервера
+## Шаги, если сменился IP сервера
 
 1. Поменять адрес в `inventory.ini`.
-2. Поменять A-запись домена у регистратора и дождаться её (`dig +short <домен>`).
-3. На ноде: `ssh-keygen -R <старый IP>`, затем один вход по SSH, чтобы принять новый отпечаток.
-4. Прогнать `ansible-playbook site.yml`.
+2. Поменять A-запись домена у регистратора и дождаться её:
 
-Правила файрвола, список целей Prometheus и адрес Logstash для Filebeat обновятся сами: плейбуки берут IP из инвентаря.
+```bash
+# имя отвечает новым IP (если старый, подождите 5–10 минут)
+dig +short <домен>
+```
+
+3. На ноде заменить отпечаток сервера:
+
+```bash
+# забываем отпечаток старого адреса
+ssh-keygen -R <старый IP>
+# входим по новому адресу строго по ключу, принимаем отпечаток (yes) и выходим
+ssh -i ~/.ssh/control_ed25519 -o PasswordAuthentication=no root@<новый IP> exit
+```
+
+4. Прогнать установку:
+
+```bash
+# плейбуки возьмут новый IP из инвентаря
+ansible-playbook site.yml
+```
+
+Список целей Prometheus и адрес Logstash для Filebeat обновятся сами: плейбуки берут IP из инвентаря, а Compose пересоздаст Filebeat на B, когда в его `.env` поменяется адрес.
+
+Файрвол ведёт себя иначе: плейбук **добавит** правило для нового IP, но правило для старого адреса останется. Если сменился IP одного сервера, на **другом** сервере удалите устаревшее правило вручную:
+
+```bash
+# правила с номерами: ищем строку со старым IP
+ansible all -m command -a "ufw status numbered"
+# удаляем правило по номеру на нужном сервере (подставьте группу и номер; --force без вопроса y/n)
+ansible <elk или monitoring> -m command -a "ufw --force delete <номер>"
+```
 
 ---
 
 ## Если что-то пошло не так
 
-| Симптом | Куда смотреть |
+### Где что лежит
+
+| Сервер | Группа Ansible | Папка стека | Сервисы (имена для `docker compose`) |
+|---|---|---|---|
+| A | `elk` | `/opt/monitoring-compose/elk` | `elasticsearch`, `kibana`, `logstash`, `filebeat`, `node-exporter` |
+| B | `monitoring` | `/opt/monitoring-compose/prometheus-grafana` | `prometheus`, `grafana`, `filebeat`, `node-exporter` |
+
+Команды `docker compose` работают **только из папки стека**: в другом месте будет ошибка `no configuration file provided: not found`.
+
+### Логи и состояние: с ноды, не заходя на сервер
+
+```bash
+# состояние контейнеров A (для B: группа monitoring и папка prometheus-grafana)
+ansible elk -m command -a "chdir=/opt/monitoring-compose/elk docker compose ps"
+# последние 50 строк лога сервиса (подставьте группу, папку и сервис из таблицы выше)
+ansible monitoring -m command -a "chdir=/opt/monitoring-compose/prometheus-grafana docker compose logs --tail 50 prometheus"
+# только строки с ошибками и предупреждениями
+ansible monitoring -m shell -a "cd /opt/monitoring-compose/prometheus-grafana && docker compose logs --tail 200 grafana | grep -iE 'error|warn'"
+# перезапуск одного сервиса (данные в томах сохраняются)
+ansible monitoring -m command -a "chdir=/opt/monitoring-compose/prometheus-grafana docker compose restart grafana"
+```
+
+То же самое на самом сервере (после `ssh -i ~/.ssh/control_ed25519 root@<IP>`):
+
+```bash
+# переходим в папку стека
+cd /opt/monitoring-compose/prometheus-grafana
+# состояние и лог сервиса
+docker compose ps
+docker compose logs --tail 50 prometheus
+```
+
+### Частые симптомы
+
+| Симптом | Причина и что делать |
 |---|---|
-| Ожидание Elasticsearch дошло до `fatal` | `docker compose logs --tail 40 elasticsearch` на A; частая причина — мало памяти |
-| certbot упал | **не перезапускать сразу**: у Let's Encrypt лимит неудачных попыток (около 5 в час). Проверить DNS (`dig`) и что порт 80 открыт |
-| Prometheus не видит цели | права на `prometheus/targets/node.yml` должны быть `0644`; `docker compose logs --tail 50 prometheus` |
+| Ожидание Elasticsearch дошло до `fatal` | лог `elasticsearch` на A; частая причина — мало памяти |
+| certbot упал | **не перезапускать сразу**: у Let's Encrypt лимит неудачных попыток (около 5 в час). Проверить DNS (`dig +short <домен>`) и что порт 80 открыт (`ufw status`) |
+| Prometheus не видит цели | права на `prometheus/targets/node.yml` должны быть `0644` (Prometheus в контейнере работает не от root); лог `prometheus` на B |
+| Дашборд Grafana или Kibana пустой, в поле Datasource (или data view) непонятный ID | страница открыта по старой ссылке или вкладке от прошлой установки: выбранные значения хранятся прямо в адресе. Открыть сайт с главной страницы и выбрать дашборд из списка. Если и так пусто — сверить uid источника в Grafana (команда ниже) с uid в JSON дашборда |
 | Ошибка скрыта надписью `no_log` | временно поставить `no_log: false` у задачи, посмотреть, вернуть `true` |
 | `key cannot contain a space` в `.env` | в `.env` попал чужой файл: проверить `dest` у задач `template` |
+| `no configuration file provided: not found` | команда `docker compose` запущена не из папки стека (см. «Где что лежит») |
+
+```bash
+# uid источников данных в Grafana (пароль admin из сейфа подставляется на ноде; ждём "uid":"prometheus")
+ansible monitoring -m shell -a "curl -s -u admin:{{ grafana_admin_password }} http://127.0.0.1:3000/api/datasources | grep -o '\"uid\":\"[^\"]*\"'"
+```
 
 ---
 
