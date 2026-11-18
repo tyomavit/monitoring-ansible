@@ -1,0 +1,8 @@
+---
+# общий плейбук: вызывает остальные по порядку
+- import_playbook: prep.yml
+- import_playbook: docker.yml
+- import_playbook: firewall.yml
+- import_playbook: elk.yml
+- import_playbook: monitoring.yml
+- import_playbook: nginx.yml

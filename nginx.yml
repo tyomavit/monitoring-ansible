@@ -1,0 +1,50 @@
+---
+- name: nginx и HTTPS на обоих серверах
+  hosts: all
+
+  tasks:
+    - name: nginx и certbot
+      ansible.builtin.apt:
+        name: [nginx, certbot]
+        state: present
+        update_cache: true
+
+    # заглушка default ещё работает и отдаёт /var/www/html: туда certbot положит проверочный файл
+    - name: Сертификат Let's Encrypt (только если его ещё нет)
+      ansible.builtin.command:
+        cmd: >-
+          certbot certonly --webroot -w /var/www/html
+          -d {{ site_domain }}
+          --non-interactive --agree-tos -m {{ certbot_email }}
+          --deploy-hook "systemctl reload nginx"
+        creates: /etc/letsencrypt/live/{{ site_domain }}/fullchain.pem
+
+    - name: Конфиг сайта
+      ansible.builtin.template:
+        src: nginx/site.conf.j2
+        dest: /etc/nginx/sites-available/{{ site_domain }}.conf
+        mode: "0644"
+      notify: [Проверить конфиг nginx, Перечитать nginx]
+
+    - name: Включаем сайт
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/{{ site_domain }}.conf
+        dest: /etc/nginx/sites-enabled/{{ site_domain }}.conf
+        state: link
+      notify: [Проверить конфиг nginx, Перечитать nginx]
+
+    - name: Убираем сайт-заглушку
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: [Проверить конфиг nginx, Перечитать nginx]
+
+  handlers:
+    # сначала проверка: если в конфиге ошибка, плейбук остановится, и рабочий nginx не сломается
+    - name: Проверить конфиг nginx
+      ansible.builtin.command: nginx -t
+
+    - name: Перечитать nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded

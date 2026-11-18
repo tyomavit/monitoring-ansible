@@ -13,8 +13,9 @@
       loop:
         - "{{ monitoring_dir }}"
         - "{{ monitoring_dir }}/prometheus/targets"
-        - "{{ monitoring_dir }}/grafana/provisioning/datasources"
         - "{{ monitoring_dir }}/filebeat"
+        - "{{ monitoring_dir }}/grafana/provisioning/dashboards/json"
+        - "{{ monitoring_dir }}/grafana/provisioning/datasources"
 
     - name: Файл .env из шаблона
       ansible.builtin.template:
@@ -38,6 +39,8 @@
         - { src: monitoring/prometheus/prometheus.yml, dest: prometheus/prometheus.yml }
         - { src: monitoring/grafana/provisioning/datasources/prometheus.yml,	dest: grafana/provisioning/datasources/prometheus.yml }
         - { src: monitoring/filebeat/filebeat.yml, dest: filebeat/filebeat.yml }
+        - { src: monitoring/grafana/provisioning/dashboards/dashboards.yml, dest: grafana/provisioning/dashboards/dashboards.yml }
+        - { src: monitoring/grafana/provisioning/dashboards/json/node-exporter-full.json, dest: grafana/provisioning/dashboards/json/node-exporter-full.json }
         
     # все четыре сервиса разом: порядок не важен, пользователей создавать не нужно
     - name: Запуск стека

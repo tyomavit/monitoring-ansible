@@ -4,4 +4,4 @@ vault_kibana_password: CHANGE_ME
 vault_logstash_internal_password: CHANGE_ME
 vault_kibana_encryption_key: CHANGE_ME
 vault_grafana_admin_password: CHANGE_ME
-
+vault_certbot_email: CHANGE_ME

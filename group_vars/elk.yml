@@ -1,0 +1,3 @@
+---
+site_domain: "{{ kibana_domain }}"
+site_upstream: 127.0.0.1:5601

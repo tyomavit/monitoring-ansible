@@ -1,0 +1,3 @@
+---
+site_domain: "{{ grafana_domain }}"
+site_upstream: 127.0.0.1:3000

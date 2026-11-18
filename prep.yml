@@ -14,6 +14,16 @@
         update_cache: true
         cache_valid_time: 3600
 
+    # VPS разворачиваются из одного образа с одинаковым machine-id; пересоздаём один раз
+    - name: Уникальный machine-id
+      ansible.builtin.shell: |
+        rm -f /etc/machine-id /var/lib/dbus/machine-id
+        systemd-machine-id-setup
+        systemctl restart systemd-journald
+        touch /etc/machine-id.regenerated
+      args:
+        creates: /etc/machine-id.regenerated
+
     - name: Имя сервера как в инвентаре
       ansible.builtin.hostname:
         name: "{{ inventory_hostname }}"
